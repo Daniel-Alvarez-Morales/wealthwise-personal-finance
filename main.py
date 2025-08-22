@@ -459,13 +459,20 @@ def format_bank_statement_for_ai(debits_df, credits_df, selected_month):
     Returns:
         str: Formatted bank statement data as JSON string
     """
-    # Calculate summary statistics
+    # Calculate summary statistics (excluding savings from expenses)
     total_income = credits_df['Importe'].sum()
-    total_expenses = debits_df['Importe'].sum()
-    balance = total_income - total_expenses
     
-    # Get category breakdown
-    category_breakdown = debits_df.groupby('Category')['Importe'].sum().to_dict()
+    # Separate savings from expenses
+    savings_df = debits_df[debits_df['Category'] == 'Savings']
+    expenses_df = debits_df[debits_df['Category'] != 'Savings']
+    
+    total_savings = savings_df['Importe'].sum()
+    total_expenses = expenses_df['Importe'].sum()
+    balance = total_income - (total_expenses + total_savings)
+    
+    # Get category breakdown (excluding savings from expenses)
+    category_breakdown = expenses_df.groupby('Category')['Importe'].sum().to_dict()
+    savings_breakdown = {'Savings': float(total_savings)} if total_savings > 0 else {}
     
     # Format transaction data
     debit_transactions = []
@@ -491,13 +498,17 @@ def format_bank_statement_for_ai(debits_df, credits_df, selected_month):
         "summary": {
             "total_income": float(total_income),
             "total_expenses": float(total_expenses),
+            "total_savings": float(total_savings),
             "net_balance": float(balance),
             "transaction_count": {
                 "debits": len(debits_df),
-                "credits": len(credits_df)
+                "credits": len(credits_df),
+                "expenses": len(expenses_df),
+                "savings": len(savings_df)
             }
         },
         "expense_categories": category_breakdown,
+        "savings_categories": savings_breakdown,
         "recent_debits": debit_transactions,
         "recent_credits": credit_transactions
     }
@@ -578,23 +589,31 @@ def render_month_selector(available_months):
 
 def render_summary_metrics(debits_df, credits_df):
     """
-    Render summary financial metrics in a 3-column layout.
+    Render summary financial metrics in a 4-column layout.
     
     Args:
         debits_df (pandas.DataFrame): Debit transactions
         credits_df (pandas.DataFrame): Credit transactions
     """
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     total_income = credits_df['Importe'].sum()
-    total_expenses = debits_df['Importe'].sum()
-    balance = total_income - total_expenses
+    
+    # Separate savings from expenses
+    savings_df = debits_df[debits_df['Category'] == 'Savings']
+    expenses_df = debits_df[debits_df['Category'] != 'Savings']
+    
+    total_savings = savings_df['Importe'].sum()
+    total_expenses = expenses_df['Importe'].sum()
+    balance = total_income - (total_expenses + total_savings)
     
     with col1:
         st.metric("💰 Total Income", f"{total_income:,.2f} €")
     with col2:
         st.metric("💸 Total Expenses", f"{total_expenses:,.2f} €")
     with col3:
+        st.metric("🏦 Total Savings", f"{total_savings:,.2f} €")
+    with col4:
         delta_color = "normal" if balance >= 0 else "inverse"
         st.metric("📊 Balance", f"{balance:,.2f} €", delta=f"{balance:,.2f} €")
 
@@ -717,15 +736,18 @@ def process_category_changes(edited_df):
 
 def render_expense_summary(debits_df):
     """
-    Render expense summary with category breakdown and pie chart.
+    Render expense summary with category breakdown and pie chart (excluding savings).
     
     Args:
         debits_df (pandas.DataFrame): Debit transactions DataFrame
     """
     st.subheader("Expenses Summary")
     
-    # Calculate category totals
-    category_totals = debits_df.groupby('Category')['Importe'].sum().reset_index()
+    # Exclude savings from expenses summary
+    expenses_df = debits_df[debits_df['Category'] != 'Savings']
+    
+    # Calculate category totals for expenses only
+    category_totals = expenses_df.groupby('Category')['Importe'].sum().reset_index()
     category_totals = category_totals.sort_values(by='Importe', ascending=False)
     
     # Display summary table
@@ -778,6 +800,174 @@ def render_credits_tab(credits_df):
 
     
     st.write(credits_df)
+
+def render_savings_tab(debits_df):
+    """
+    Render savings transactions tab with detailed analysis and visualizations.
+    
+    Args:
+        debits_df (pandas.DataFrame): All debit transactions DataFrame
+    """
+    st.subheader("🏦 Savings Management")
+    
+    # Filter only savings transactions
+    savings_df = debits_df[debits_df['Category'] == 'Savings'].copy()
+    
+    if savings_df.empty:
+        st.info("💡 **No savings transactions found!** Start categorizing your savings transfers and deposits as 'Savings' to track them here.")
+        st.markdown("""
+        ### 🤔 **What should be categorized as Savings?**
+        - ✅ Transfers to savings accounts
+        - ✅ Investment contributions
+        - ✅ Retirement fund deposits
+        - ✅ Emergency fund contributions
+        - ✅ Fixed deposits
+        - ❌ Don't include regular expenses here
+        """)
+        return
+    
+    # Savings Summary Metrics
+    st.markdown("### 📊 Savings Overview")
+    
+    total_savings = savings_df['Importe'].sum()
+    avg_savings = savings_df['Importe'].mean()
+    savings_count = len(savings_df)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("🏦 Total Savings", f"{total_savings:,.2f} €")
+    with col2:
+        st.metric("📈 Average Savings", f"{avg_savings:,.2f} €")
+    with col3:
+        st.metric("📋 Savings Transactions", f"{savings_count}")
+    
+    # Savings transactions over time visualization
+    st.markdown("### 📈 Savings Timeline")
+    
+    if len(savings_df) > 1:
+        # Sort by date for timeline
+        savings_timeline = savings_df.sort_values('Fecha valor').copy()
+        savings_timeline['Cumulative_Savings'] = savings_timeline['Importe'].cumsum()
+        
+        # Create line chart showing cumulative savings
+        fig = px.line(
+            savings_timeline, 
+            x='Fecha valor', 
+            y='Cumulative_Savings',
+            title='🎯 Cumulative Savings Growth',
+            labels={'Cumulative_Savings': 'Cumulative Savings (€)', 'Fecha valor': 'Date'}
+        )
+        fig.update_layout(
+            title_font_size=20,
+            title_font_family="Inter",
+            title_font_color="#1f2937",
+            title_x=0.5,
+            font_family="Inter",
+            font_color="#1f2937",
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            xaxis=dict(gridcolor='lightgray'),
+            yaxis=dict(gridcolor='lightgray')
+        )
+        fig.update_traces(line_color='#10b981', line_width=3)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Monthly savings bar chart
+        savings_timeline['Month'] = savings_timeline['Fecha valor'].dt.to_period('M').astype(str)
+        monthly_savings = savings_timeline.groupby('Month')['Importe'].sum().reset_index()
+        
+        fig2 = px.bar(
+            monthly_savings,
+            x='Month',
+            y='Importe',
+            title='💰 Monthly Savings Contributions',
+            labels={'Importe': 'Savings Amount (€)', 'Month': 'Month'},
+            color='Importe',
+            color_continuous_scale='Greens'
+        )
+        fig2.update_layout(
+            title_font_size=20,
+            title_font_family="Inter",
+            title_font_color="#1f2937",
+            title_x=0.5,
+            font_family="Inter",
+            font_color="#1f2937",
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            xaxis=dict(gridcolor='lightgray'),
+            yaxis=dict(gridcolor='lightgray'),
+            showlegend=False
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    # Detailed savings transactions table
+    st.markdown("### 📋 All Savings Transactions")
+    
+    # Add search functionality for savings
+    search_term = st.text_input("🔍 Search savings transactions by concept:", key="savings_search")
+    
+    # Filter savings by search term
+    if search_term:
+        mask = savings_df['Concepto'].str.contains(search_term, case=False, na=False)
+        filtered_savings_df = savings_df[mask]
+        st.info(f"🔍 Showing {len(filtered_savings_df)} of {len(savings_df)} savings transactions matching '{search_term}'")
+    else:
+        filtered_savings_df = savings_df
+    
+    # Display savings transactions with proper formatting
+    if not filtered_savings_df.empty:
+        # Sort by date (newest first)
+        filtered_savings_df = filtered_savings_df.sort_values('Fecha valor', ascending=False)
+        
+        # Display formatted table
+        st.dataframe(
+            filtered_savings_df[['Fecha valor', 'Concepto', 'Importe', 'Category']],
+            column_config={
+                "Fecha valor": st.column_config.DateColumn(
+                    "📅 Date",
+                    format="DD/MM/YYYY"
+                ),
+                "Concepto": st.column_config.TextColumn(
+                    "💳 Description",
+                    width="large"
+                ),
+                "Importe": st.column_config.NumberColumn(
+                    "💰 Amount",
+                    format="%.2f €"
+                ),
+                "Category": st.column_config.TextColumn(
+                    "🏷️ Category"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Savings insights
+        st.markdown("### 💡 Savings Insights")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Largest savings transaction
+            max_savings = filtered_savings_df.loc[filtered_savings_df['Importe'].idxmax()]
+            st.success(f"🎯 **Largest Savings**: {max_savings['Importe']:.2f} € on {max_savings['Fecha valor'].strftime('%d/%m/%Y')}")
+            
+        with col2:
+            # Most recent savings
+            recent_savings = filtered_savings_df.iloc[0]  # Already sorted by date desc
+            st.info(f"🕐 **Most Recent**: {recent_savings['Importe']:.2f} € on {recent_savings['Fecha valor'].strftime('%d/%m/%Y')}")
+        
+        # Savings frequency analysis
+        if len(filtered_savings_df) > 2:
+            # Calculate average days between savings
+            date_diffs = filtered_savings_df['Fecha valor'].sort_values().diff().dt.days.dropna()
+            avg_frequency = date_diffs.mean()
+            
+            if not pd.isna(avg_frequency):
+                st.metric("⏱️ Average Days Between Savings", f"{avg_frequency:.0f} days")
+    else:
+        st.warning("🔍 No savings transactions match your search criteria.")
 
 def render_database_info():
     """
@@ -1048,7 +1238,7 @@ def main():
         st.session_state.debits_df = debits_df.copy()
         
         # Create main tabs
-        tab1, tab2, tab3 = st.tabs(["Debits", "Credits", "Database Info"])
+        tab1, tab2, tab3 = st.tabs(["Debits", "Credits", "Savings"])
         
         with tab1:
             # Category management
@@ -1068,8 +1258,8 @@ def main():
             render_credits_tab(credits_df)
         
         with tab3:
-            # Database statistics and management
-            render_database_info()
+            # Savings transactions and analysis
+            render_savings_tab(debits_df)
     
     elif uploaded_file is not None:
         # Handle case where file upload failed

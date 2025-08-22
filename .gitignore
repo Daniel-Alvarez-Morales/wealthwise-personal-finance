@@ -122,3 +122,4 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+categories*.json
